@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitor de Sonolência — Motorista</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#141b27; --panel2:#1c2533; --line:#26303f;
+    --txt:#e8eef7; --muted:#8b97a8;
+    --green:#22c55e; --yellow:#eab308; --orange:#f97316; --red:#ef4444; --blue:#3b82f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:'Segoe UI',Roboto,Arial,sans-serif}
+  header{padding:14px 22px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;gap:12px}
+  header h1{font-size:18px;margin:0;font-weight:600;letter-spacing:.3px}
+  header .sub{color:var(--muted);font-size:13px}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--green);
+       box-shadow:0 0 10px var(--green)}
+  .wrap{display:grid;grid-template-columns:1.4fr 1fr;gap:18px;padding:18px;
+        max-width:1280px;margin:0 auto}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+        padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+  .videoCard{padding:10px}
+  .videoCard img{width:100%;border-radius:10px;display:block;background:#000;
+                 aspect-ratio:16/9;object-fit:cover}
+  .banner{margin-top:10px;border-radius:10px;padding:14px 16px;font-weight:700;
+          font-size:22px;text-align:center;letter-spacing:.5px;
+          transition:background .25s, box-shadow .25s; color:#0b0f17}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .metric{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+          padding:12px 14px}
+  .metric .k{color:var(--muted);font-size:12px;text-transform:uppercase;
+             letter-spacing:.5px}
+  .metric .v{font-size:26px;font-weight:700;margin-top:4px}
+  .metric .v small{font-size:13px;color:var(--muted);font-weight:500}
+  .gaugeWrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .scoreNum{font-size:54px;font-weight:800;line-height:1}
+  .scoreBar{width:100%;height:18px;border-radius:9px;background:var(--panel2);
+            overflow:hidden;border:1px solid var(--line)}
+  .scoreFill{height:100%;width:0;border-radius:9px;transition:width .2s, background .2s}
+  h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;
+     margin:0 0 12px}
+  canvas{width:100%;height:120px;display:block}
+  .btns{display:flex;gap:10px;margin-top:14px}
+  button{flex:1;background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+         padding:11px;border-radius:10px;font-size:14px;cursor:pointer;font-weight:600}
+  button:hover{background:#243044}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--muted)}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .chip{width:12px;height:12px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="liveDot"></span>
+  <h1>Monitor de Sonolência do Motorista</h1>
+  <span class="sub">Sistemas Embarcados · EAR + PERCLOS · MediaPipe</span>
+</header>
+
+<div class="wrap">
+  <!-- COLUNA ESQUERDA: video + banner -->
+  <div>
+    <div class="card videoCard">
+      <img src="/video_feed" alt="camera">
+      <div class="banner" id="banner">INICIANDO…</div>
+      <div class="legend">
+        <span><i class="chip" style="background:var(--green)"></i>olhos abertos</span>
+        <span><i class="chip" style="background:var(--red)"></i>fechados/semicerrados</span>
+        <span><i class="chip" style="background:var(--blue)"></i>boca (bocejo)</span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:18px">
+      <h2>Histórico de sonolência</h2>
+      <canvas id="chart" width="600" height="120"></canvas>
+    </div>
+  </div>
+
+  <!-- COLUNA DIREITA: metricas -->
+  <div>
+    <div class="card gaugeWrap">
+      <h2 style="align-self:flex-start">Pontuação de sonolência</h2>
+      <div class="scoreNum" id="scoreNum">0</div>
+      <div class="scoreBar"><div class="scoreFill" id="scoreFill"></div></div>
+      <div class="btns">
+        <button onclick="recalibrate()">↻ Recalibrar</button>
+        <button onclick="toggleSound()" id="soundBtn">🔊 Som: ON</button>
+      </div>
+      <div class="btns">
+        <button onclick="toggleRecord()" id="recBtn">⏺ Gravar CSV: OFF</button>
+        <button onclick="toggleTruth()" id="truthBtn">🏷 Rótulo: alerta</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">
+        Para coletar dados do artigo: ligue <b>Gravar</b>, e segure o <b>Rótulo</b>
+        em "sonolento" enquanto fecha os olhos. Depois rode <code>evaluate.py</code>.
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:18px">
+      <div class="metric"><div class="k">Estado do olho</div><div class="v" id="state" style="font-size:18px">—</div></div>
+      <div class="metric"><div class="k">Nível</div><div class="v" id="level" style="font-size:18px">—</div></div>
+      <div class="metric"><div class="k">EAR (Método A)</div><div class="v" id="ear">0.00</div></div>
+      <div class="metric"><div class="k">Blink ML (Método B)</div><div class="v" id="blink">0.00</div></div>
+      <div class="metric"><div class="k">PERCLOS</div><div class="v" id="perclos">0<small>%</small></div></div>
+      <div class="metric"><div class="k">Bocejos</div><div class="v" id="yawns">0</div></div>
+      <div class="metric"><div class="k">FPS</div><div class="v" id="fps">0</div></div>
+      <div class="metric"><div class="k">Sessão</div><div class="v" id="elapsed" style="font-size:20px">0s</div></div>
+      <div class="metric"><div class="k">Rosto</div><div class="v" id="face" style="font-size:18px">—</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLORS = {0:'#22c55e',1:'#eab308',2:'#f97316',3:'#ef4444'};
+const history = [];           // ultimos N scores
+const MAX_POINTS = 160;
+const cv = document.getElementById('chart');
+const ctx = cv.getContext('2d');
+
+function drawChart(){
+  const w = cv.width, h = cv.height;
+  ctx.clearRect(0,0,w,h);
+  // linhas de nivel (30/60/85)
+  const levels = [{y:30,c:'#eab308'},{y:60,c:'#f97316'},{y:85,c:'#ef4444'}];
+  levels.forEach(l=>{
+    const y = h - (l.y/100)*h;
+    ctx.strokeStyle = l.c+'55'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+  });
+  if(history.length<2) return;
+  ctx.lineWidth=2.5; ctx.strokeStyle='#3b82f6';
+  ctx.beginPath();
+  history.forEach((s,i)=>{
+    const x = (i/(MAX_POINTS-1))*w;
+    const y = h - (s/100)*h;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  // ponto atual
+  const last = history[history.length-1];
+  const lx = ((history.length-1)/(MAX_POINTS-1))*w;
+  const ly = h-(last/100)*h;
+  ctx.fillStyle = COLORS[ last>=85?3:last>=60?2:last>=30?1:0 ];
+  ctx.beginPath(); ctx.arc(lx,ly,4,0,7); ctx.fill();
+}
+
+function fmtTime(s){
+  const m=Math.floor(s/60), ss=Math.floor(s%60);
+  return m>0 ? `${m}m ${ss}s` : `${ss}s`;
+}
+
+async function tick(){
+  try{
+    const r = await fetch('/metrics'); const m = await r.json();
+    const c = COLORS[m.level] || '#22c55e';
+
+    document.getElementById('scoreNum').textContent = Math.round(m.score);
+    document.getElementById('scoreNum').style.color = c;
+    const fill = document.getElementById('scoreFill');
+    fill.style.width = Math.min(m.score,100)+'%';
+    fill.style.background = c;
+
+    const banner = document.getElementById('banner');
+    banner.textContent = m.level_label + (m.level>=3 ? '  —  PARE O VEÍCULO' : '');
+    banner.style.background = c;
+    banner.style.boxShadow = m.level>=2 ? `0 0 26px ${c}` : 'none';
+
+    document.getElementById('state').textContent = m.state;
+    document.getElementById('level').textContent = m.level_label;
+    document.getElementById('level').style.color = c;
+    document.getElementById('ear').textContent = m.ear.toFixed(2);
+    document.getElementById('blink').textContent = (m.blink||0).toFixed(2);
+    document.getElementById('perclos').innerHTML = m.perclos+'<small>%</small>';
+    document.getElementById('yawns').textContent = m.yawns;
+    document.getElementById('fps').textContent = m.fps;
+    document.getElementById('elapsed').textContent = fmtTime(m.elapsed);
+    document.getElementById('face').textContent = m.face ? '✓ detectado' : '✗ ausente';
+    document.getElementById('face').style.color = m.face ? 'var(--green)' : 'var(--red)';
+
+    const sb = document.getElementById('soundBtn');
+    sb.textContent = m.sound ? '🔊 Som: ON' : '🔇 Som: OFF';
+
+    const rb = document.getElementById('recBtn');
+    rb.textContent = m.recording ? '⏹ Gravar CSV: ON' : '⏺ Gravar CSV: OFF';
+    rb.style.background = m.recording ? '#7f1d1d' : '';
+    const tb = document.getElementById('truthBtn');
+    tb.textContent = m.ground_truth ? '🏷 Rótulo: SONOLENTO' : '🏷 Rótulo: alerta';
+    tb.style.background = m.ground_truth ? '#854d0e' : '';
+
+    if(!m.calibrating){
+      history.push(m.score);
+      if(history.length>MAX_POINTS) history.shift();
+      drawChart();
+    }
+  }catch(e){ /* servidor reiniciando */ }
+}
+
+async function recalibrate(){ await fetch('/recalibrate',{method:'POST'}); }
+async function toggleSound(){ await fetch('/toggle_sound',{method:'POST'}); }
+async function toggleRecord(){ await fetch('/toggle_record',{method:'POST'}); }
+async function toggleTruth(){ await fetch('/toggle_truth',{method:'POST'}); }
+
+setInterval(tick, 160);   // ~6x por segundo
+tick();
+</script>
+</body>
+</html>

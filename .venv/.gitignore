@@ -1,0 +1,35 @@
+# ---- Ambientes virtuais ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Cache do Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ---- IDE / editores ----
+.vscode/
+.idea/
+*.swp
+
+# ---- Sistema operacional ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ---- Saidas geradas em runtime ----
+*.log
+*.csv
+captures/
+recordings/
+
+# OBS: face_landmarker.task (modelo do MediaPipe, ~3,6 MB) NAO entra aqui de
+# proposito: ele e versionado junto para o projeto rodar sem download extra.

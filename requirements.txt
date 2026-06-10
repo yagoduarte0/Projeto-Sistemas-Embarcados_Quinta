@@ -1,0 +1,6 @@
+# MediaPipe ja traz junto o OpenCV (opencv-contrib-python) e o numpy compativeis.
+# Nao adicione opencv-python separado: cria conflito de cv2.
+# Testado com Python 3.13, mediapipe 0.10.35, opencv 4.13, numpy 2.4.
+mediapipe>=0.10
+flask>=3.0
+matplotlib>=3.7
