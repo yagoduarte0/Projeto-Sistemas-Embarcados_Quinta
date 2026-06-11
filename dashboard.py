@@ -453,7 +453,15 @@ def toggle_truth():
 
 if __name__ == "__main__":
     cam = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
     engine = DrowsinessEngine(cam)
     engine.start()
-    print("Dashboard em http://127.0.0.1:5000")
-    app.run(host="0.0.0.0", port=5000, threaded=True, debug=False)
+    print(f"Dashboard em http://127.0.0.1:{port}")
+    try:
+        app.run(host="0.0.0.0", port=port, threaded=True, debug=False)
+    except OSError as e:
+        engine.stop()
+        print(f"\nNao foi possivel iniciar o servidor na porta {port}: {e}")
+        print("Provavel causa: ja existe outro dashboard rodando nessa porta.")
+        print(f"-> Acesse http://127.0.0.1:{port} no navegador, ou")
+        print(f"-> rode em outra porta: python dashboard.py {cam} <porta>")

@@ -1,0 +1,13 @@
+# Ambientes virtuais Python (cada maquina/SO deve criar o seu - ver README)
+.venv/
+.venv*/
+venv/
+env/
+
+# Cache de bytecode Python
+__pycache__/
+*.pyc
+
+# Saidas geradas em runtime (coleta de dados e avaliacao)
+logs/
+figures/

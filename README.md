@@ -47,9 +47,17 @@ A pontuação evolui no tempo (exatamente o "ir aumentando" pedido):
 
 ## Instalação
 
+Cada máquina/SO deve criar seu **próprio ambiente virtual** (a pasta `.venv` não
+é versionada — veja [Solução de problemas](#solução-de-problemas) se você
+encontrar referências a uma `.venv` antiga).
+
 ```powershell
+python -m venv .venv
+.venv\Scripts\activate          # Linux/Mac: source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Compatível com Python 3.10 a 3.13.
 
 ## Execução
 
@@ -58,8 +66,9 @@ Há duas formas de rodar:
 ### 1) Dashboard web (recomendado para a apresentação)
 
 ```powershell
-python dashboard.py        # câmera 0
-python dashboard.py 1      # outra câmera (ex.: webcam USB no retrovisor)
+python dashboard.py            # câmera 0, porta 5000
+python dashboard.py 1          # outra câmera (ex.: webcam USB no retrovisor)
+python dashboard.py 0 5001     # outra porta (se a 5000 já estiver em uso)
 ```
 
 Depois abra **http://127.0.0.1:5000** no navegador. Mostra, ao vivo:
@@ -183,6 +192,19 @@ Para gerar os números do artigo:
    limiar (PNG **e** PDF) e `metrics_table.tex` (tabela pronta para o LaTeX).
 
 O rascunho do artigo (modelo SBrT, em inglês) está em [`artigo/main.tex`](artigo/main.tex).
+
+## Solução de problemas
+
+- **`.venv` não funciona / aponta para outro usuário ou Python**: a pasta
+  `.venv` é local de cada máquina e não deve ser versionada. Apague a pasta
+  `.venv` e recrie com `python -m venv .venv` (veja [Instalação](#instalação)).
+- **"Address already in use" / porta 5000 ocupada**: já existe um
+  `dashboard.py` rodando (nesta ou em outra janela). Acesse
+  `http://127.0.0.1:5000` direto, feche a instância antiga, ou rode com outra
+  porta: `python dashboard.py 0 5001`.
+- **"ERRO: SEM CAMERA" / câmera não abre**: outro processo (outra instância do
+  dashboard, Teams, etc.) pode estar usando a câmera. Feche-o e recarregue a
+  página, ou indique outro índice de câmera (`python dashboard.py 1`).
 
 ## Observações
 
