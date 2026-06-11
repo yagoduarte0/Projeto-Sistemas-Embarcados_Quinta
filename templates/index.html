@@ -45,7 +45,9 @@
   h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;
      margin:0 0 12px}
   canvas{width:100%;height:120px;display:block}
-  .btns{display:flex;gap:10px;margin-top:14px}
+  .ctlLabel{font-size:11px;color:var(--muted);text-transform:uppercase;
+            letter-spacing:.5px;margin-top:14px;margin-bottom:2px}
+  .btns{display:flex;gap:10px;margin-top:6px}
   button{flex:1;background:var(--panel2);color:var(--txt);border:1px solid var(--line);
          padding:11px;border-radius:10px;font-size:14px;cursor:pointer;font-weight:600}
   button:hover{background:#243044}
@@ -85,17 +87,22 @@
       <h2 style="align-self:flex-start">Pontuação de sonolência</h2>
       <div class="scoreNum" id="scoreNum">0</div>
       <div class="scoreBar"><div class="scoreFill" id="scoreFill"></div></div>
+      <div class="ctlLabel">Controle da sessão</div>
       <div class="btns">
+        <button onclick="togglePause()" id="pauseBtn">⏸ Pausar</button>
         <button onclick="recalibrate()">↻ Recalibrar</button>
-        <button onclick="toggleSound()" id="soundBtn">🔊 Som: ON</button>
+        <button onclick="toggleSound()" id="soundBtn">🔊 Silenciar</button>
       </div>
+      <div class="ctlLabel">Coleta de dados (artigo)</div>
       <div class="btns">
         <button onclick="toggleRecord()" id="recBtn">⏺ Gravar CSV: OFF</button>
         <button onclick="toggleTruth()" id="truthBtn">🏷 Rótulo: alerta</button>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">
-        Para coletar dados do artigo: ligue <b>Gravar</b>, e segure o <b>Rótulo</b>
-        em "sonolento" enquanto fecha os olhos. Depois rode <code>evaluate.py</code>.
+        <b>Pausar</b> congela a detecção e o som. <b>Recalibrar</b> zera a
+        pontuação. <b>Silenciar</b> só desliga o som.<br>
+        Para coletar dados: ligue <b>Gravar</b> e mantenha o <b>Rótulo</b> em
+        "sonolento" enquanto fecha os olhos. Depois rode <code>evaluate.py</code>.
       </div>
     </div>
 
@@ -106,6 +113,9 @@
       <div class="metric"><div class="k">Blink ML (Método B)</div><div class="v" id="blink">0.00</div></div>
       <div class="metric"><div class="k">PERCLOS</div><div class="v" id="perclos">0<small>%</small></div></div>
       <div class="metric"><div class="k">Bocejos</div><div class="v" id="yawns">0</div></div>
+      <div class="metric"><div class="k">Microssonos</div><div class="v" id="microsleep">0</div></div>
+      <div class="metric"><div class="k">Piscadas/min</div><div class="v" id="blinkrate">0</div></div>
+      <div class="metric"><div class="k">Distração (yaw°)</div><div class="v" id="yaw" style="font-size:20px">0°</div></div>
       <div class="metric"><div class="k">FPS</div><div class="v" id="fps">0</div></div>
       <div class="metric"><div class="k">Sessão</div><div class="v" id="elapsed" style="font-size:20px">0s</div></div>
       <div class="metric"><div class="k">Rosto</div><div class="v" id="face" style="font-size:18px">—</div></div>
@@ -164,9 +174,14 @@ async function tick(){
     fill.style.background = c;
 
     const banner = document.getElementById('banner');
-    banner.textContent = m.level_label + (m.level>=3 ? '  —  PARE O VEÍCULO' : '');
-    banner.style.background = c;
-    banner.style.boxShadow = m.level>=2 ? `0 0 26px ${c}` : 'none';
+    let btxt = m.level_label + (m.level>=3 ? '  —  PARE O VEÍCULO' : '');
+    let bcol = c;
+    if(m.paused){ btxt = '⏸ PAUSADO'; bcol = '#64748b'; }
+    else if(m.microsleep_active){ btxt = 'MICROSSONO DETECTADO!'; bcol = '#ef4444'; }
+    else if(m.distracted){ btxt = 'DISTRAÍDO — OLHE A VIA'; bcol = '#f97316'; }
+    banner.textContent = btxt;
+    banner.style.background = bcol;
+    banner.style.boxShadow = (!m.paused && (m.level>=2 || m.distracted || m.microsleep_active)) ? `0 0 26px ${bcol}` : 'none';
 
     document.getElementById('state').textContent = m.state;
     document.getElementById('level').textContent = m.level_label;
@@ -175,13 +190,21 @@ async function tick(){
     document.getElementById('blink').textContent = (m.blink||0).toFixed(2);
     document.getElementById('perclos').innerHTML = m.perclos+'<small>%</small>';
     document.getElementById('yawns').textContent = m.yawns;
+    document.getElementById('microsleep').textContent = m.microsleep||0;
+    document.getElementById('blinkrate').textContent = m.blink_rate||0;
+    const yawEl = document.getElementById('yaw');
+    yawEl.textContent = (m.yaw>0?'+':'')+(m.yaw||0)+'°';
+    yawEl.style.color = m.distracted ? 'var(--orange)' : 'var(--txt)';
     document.getElementById('fps').textContent = m.fps;
     document.getElementById('elapsed').textContent = fmtTime(m.elapsed);
     document.getElementById('face').textContent = m.face ? '✓ detectado' : '✗ ausente';
     document.getElementById('face').style.color = m.face ? 'var(--green)' : 'var(--red)';
 
     const sb = document.getElementById('soundBtn');
-    sb.textContent = m.sound ? '🔊 Som: ON' : '🔇 Som: OFF';
+    sb.textContent = m.sound ? '🔊 Silenciar' : '🔇 Som OFF';
+    const pb = document.getElementById('pauseBtn');
+    pb.textContent = m.paused ? '▶ Retomar' : '⏸ Pausar';
+    pb.style.background = m.paused ? '#1e3a5f' : '';
 
     const rb = document.getElementById('recBtn');
     rb.textContent = m.recording ? '⏹ Gravar CSV: ON' : '⏺ Gravar CSV: OFF';
@@ -200,6 +223,7 @@ async function tick(){
 
 async function recalibrate(){ await fetch('/recalibrate',{method:'POST'}); }
 async function toggleSound(){ await fetch('/toggle_sound',{method:'POST'}); }
+async function togglePause(){ await fetch('/toggle_pause',{method:'POST'}); }
 async function toggleRecord(){ await fetch('/toggle_record',{method:'POST'}); }
 async function toggleTruth(){ await fetch('/toggle_truth',{method:'POST'}); }
 

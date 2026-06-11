@@ -60,6 +60,7 @@ class DrowsinessEngine:
         self._yawn_count = 0
         self._session_start = None
         self._recalib_request = False
+        self._paused = False
 
         # Registro p/ avaliacao do artigo (Metodo A=EAR, Metodo B=blendshape)
         self._recording = False
@@ -67,6 +68,14 @@ class DrowsinessEngine:
         self._ground_truth = False
         self._blink = 0.0
         self._ear_ratio = 1.0
+
+        # Atencao/distracao e fadiga
+        self._headpose = dd.HeadPoseMonitor()
+        self._fatigue = dd.FatigueMeters()
+        self._headpose_samples = []
+        self._yaw_dev = 0.0
+        self._pitch_dev = 0.0
+        self._distracted = False
 
         self.alarm = dd.AlarmManager()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -95,6 +104,12 @@ class DrowsinessEngine:
     def toggle_sound(self):
         return self.alarm.toggle()
 
+    def toggle_pause(self):
+        self._paused = not self._paused
+        if self._paused:
+            self.alarm.set_level(0)   # silencia ao pausar
+        return self._paused
+
     def toggle_record(self):
         self._recording = not self._recording
         if self._recording and self._logger is None:
@@ -114,6 +129,8 @@ class DrowsinessEngine:
             "state": "...", "ear": 0.0, "blink": 0.0, "perclos": 0.0, "yawns": 0,
             "fps": 0.0, "sound": True, "face": False,
             "calibrating": True, "recording": False, "ground_truth": False,
+            "paused": False, "distracted": False, "yaw": 0, "microsleep": 0,
+            "microsleep_active": False, "blink_rate": 0, "latency": None,
             "elapsed": 0.0,
         }
 
@@ -147,6 +164,26 @@ class DrowsinessEngine:
             prev_t = now
             fps = 1.0 / dt if dt > 0 else 0.0
 
+            # ---------- PAUSA: congela deteccao, silencia, mostra PAUSADO ----------
+            if self._paused:
+                self.alarm.set_level(0)
+                pframe = frame.copy()
+                ov = pframe.copy()
+                cv2.rectangle(ov, (0, 0), (w, h), (0, 0, 0), -1)
+                cv2.addWeighted(ov, 0.5, pframe, 0.5, 0, pframe)
+                cv2.putText(pframe, "PAUSADO", (w // 2 - 170, h // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 255, 255), 4)
+                ok_jpg, buf = cv2.imencode(".jpg", pframe,
+                                           [cv2.IMWRITE_JPEG_QUALITY, 70])
+                with self._lock:
+                    if ok_jpg:
+                        self._jpeg = buf.tobytes()
+                    self._metrics["paused"] = True
+                    self._metrics["level"] = 0
+                    self._metrics["level_label"] = "PAUSADO"
+                time.sleep(0.03)
+                continue
+
             if self._recalib_request:
                 self._calibrating = True
                 self._calib_start = now
@@ -173,13 +210,21 @@ class DrowsinessEngine:
                 mar = dd.mouth_aspect_ratio(pts, dd.MOUTH)
                 self._blink = (dd.blink_score(res.face_blendshapes[0])
                                if res.face_blendshapes else 0.0)
+                yaw = pitch = 0.0
+                if res.facial_transformation_matrixes:
+                    yaw, pitch, _ = dd.head_euler_angles(
+                        res.facial_transformation_matrixes[0])
 
                 if self._calibrating:
                     self._calib_samples.append(ear)
+                    self._headpose_samples.append((yaw, pitch))
                     if now - self._calib_start >= dd.CALIB_SECONDS:
                         arr = np.array(self._calib_samples)
                         self._ear_open = float(
                             np.median(arr[arr > np.percentile(arr, 40)]))
+                        hp = np.array(self._headpose_samples)
+                        self._headpose.set_baseline(float(np.median(hp[:, 0])),
+                                                    float(np.median(hp[:, 1])))
                         self._calibrating = False
                     state = "CALIBRANDO"
                     closed_flag = False
@@ -205,13 +250,20 @@ class DrowsinessEngine:
                     else:
                         self._yawn_active = False
 
-                # PERCLOS (so conta apos calibrar)
+                # PERCLOS + distracao + fadiga (so apos calibrar)
                 if not self._calibrating:
                     self._perclos_buf.append((now, closed_flag))
                     while self._perclos_buf and now - self._perclos_buf[0][0] > dd.PERCLOS_WINDOW:
                         self._perclos_buf.popleft()
                     if self._perclos_buf:
                         perclos = sum(1 for _, c in self._perclos_buf if c) / len(self._perclos_buf)
+
+                    self._yaw_dev, self._pitch_dev, self._distracted = \
+                        self._headpose.update(now, yaw, pitch)
+                    if self._distracted:
+                        self._score += dd.SCORE_RATE_DISTRACTED * dt
+                        state = "DISTRAIDO"
+                    self._fatigue.update(now, closed_flag)
 
                 self._draw_eyes(frame, pts, state)
             else:
@@ -231,6 +283,8 @@ class DrowsinessEngine:
             else:
                 level = 0
             self.alarm.set_level(level)
+            if level >= 1:
+                self._fatigue.register_alert(now)
 
             label = "CALIBRANDO" if self._calibrating else dd.LEVEL_LABELS[level]
 
@@ -238,7 +292,9 @@ class DrowsinessEngine:
             if self._recording and self._logger is not None and not self._calibrating:
                 self._logger.log(now - self._session_start, ear, self._ear_ratio,
                                  self._blink, state, self._score, level, perclos,
-                                 self._yawn_count, self._ground_truth)
+                                 self._yawn_count, self._yaw_dev, self._pitch_dev,
+                                 self._distracted, self._fatigue.microsleep_count,
+                                 self._fatigue.blink_rate, self._ground_truth)
 
             ok_jpg, buf = cv2.imencode(".jpg", frame,
                                        [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -260,6 +316,14 @@ class DrowsinessEngine:
                     "calibrating": self._calibrating,
                     "recording": self._recording,
                     "ground_truth": self._ground_truth,
+                    "paused": False,
+                    "distracted": self._distracted,
+                    "yaw": round(self._yaw_dev, 0),
+                    "microsleep": self._fatigue.microsleep_count,
+                    "microsleep_active": self._fatigue.microsleep_active,
+                    "blink_rate": round(self._fatigue.blink_rate, 0),
+                    "latency": (round(self._fatigue.avg_latency, 2)
+                                if self._fatigue.avg_latency is not None else None),
                     "elapsed": round(now - self._session_start, 1),
                 }
 
@@ -310,6 +374,11 @@ def video_feed():
 def recalibrate():
     engine.request_recalibration()
     return jsonify({"ok": True})
+
+
+@app.route("/toggle_pause", methods=["POST"])
+def toggle_pause():
+    return jsonify({"paused": engine.toggle_pause()})
 
 
 @app.route("/toggle_sound", methods=["POST"])

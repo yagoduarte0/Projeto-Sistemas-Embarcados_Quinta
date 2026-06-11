@@ -14,12 +14,15 @@ indústria automotiva de fadiga: **EAR** e **PERCLOS**.
 
 | Etapa | Técnica |
 |-------|---------|
-| Detecção facial | MediaPipe FaceMesh (478 pontos, com íris) |
+| Detecção facial | MediaPipe FaceLandmarker (478 pontos + blendshapes + pose) |
 | Abertura dos olhos | **EAR** — Eye Aspect Ratio (6 pontos por olho) |
 | Bocejo | **MAR** — Mouth Aspect Ratio |
 | Fadiga acumulada | **PERCLOS** — % de fecho ocular numa janela de 60 s |
-| Decisão | Pontuação de sonolência 0–100 que **sobe** com olho fechado/semicerrado e **desce** quando volta a abrir |
-| Atuação | Alarme sonoro que **escala** em 3 níveis |
+| Microssono | olhos fechados continuamente ≥ 2 s (evento contado) |
+| Piscadas | **taxa de piscadas/min** e duração média (indicadores de fadiga) |
+| Atenção / distração | **head pose** (yaw): detecta "olhos fora da via" |
+| Decisão | Pontuação de sonolência 0–100 que **sobe** com olho fechado/semicerrado/distração e **desce** quando volta a abrir |
+| Atuação | Alarme sonoro que **escala** em 3 níveis + latência medida |
 
 ### Calibração automática (3 s)
 No início (e a qualquer momento com a tecla `c`), o sistema mede o EAR de
@@ -137,11 +140,31 @@ o projeto de *eye tracking* para estudos (EyeTrax + Kalman + MediaPipe).
 8. **Comparação de 2 métodos + instrumentação:** registro em CSV com *ground
    truth* e o `evaluate.py`, comparando **EAR (geométrico)** vs **blendshape
    eyeBlink (ML)** com matriz de confusão e métricas (Atividade 4).
+9. **Monitoramento de atenção (distração):** estimativa de **head pose** (yaw)
+   pela matriz de transformação facial, com linha de base na calibração, para
+   detectar "olhos fora da via" — cobre o *Attention Monitoring* do título.
+10. **Métricas de fadiga adicionais:** detecção de **microssono** (olhos fechados
+    ≥2s), **taxa de piscadas/min**, duração média de piscada e **latência do
+    alerta** — números objetivos para a seção de resultados do artigo.
 
 > Repositório: inserir a URL aqui e adicionar o professor **rigelfernandes** como
 > membro (Atividade 1). A mesma URL deve entrar como referência no artigo.
 
 ## Coleta de dados e avaliação quantitativa
+
+### Modo automático (recomendado) — um comando só
+
+```powershell
+python coletar_e_avaliar.py        # ou: python coletar_e_avaliar.py 1
+```
+
+Conduz o protocolo sozinho (fases cronometradas alternando **OLHOS ABERTOS** e
+**FECHE OS OLHOS**, marcando o *ground truth* automaticamente), grava o CSV, e ao
+final **roda o `evaluate.py` sozinho** + imprime **FPS médio** e **latência média
+do alarme**. Gera tudo de uma vez: tabela, figuras, FPS e latência. Basta seguir
+as instruções na tela (~2 min). Tecla `q` aborta (mesmo assim avalia o coletado).
+
+### Modo manual
 
 Para gerar os números do artigo:
 

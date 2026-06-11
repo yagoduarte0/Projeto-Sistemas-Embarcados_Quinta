@@ -84,6 +84,16 @@ LEVEL_DANGER    = 85   # nivel 3: perigo
 PERCLOS_WINDOW = 60.0  # janela do PERCLOS em segundos
 CALIB_SECONDS  = 3.0   # duracao da calibracao
 
+# --- Monitoramento de atencao / distracao (head pose) ---
+YAW_AWAY_DEG        = 22.0  # desvio de yaw (graus) p/ "olhando para o lado"
+DISTRACTION_SECONDS = 1.5   # tempo olhando para o lado p/ marcar DISTRAIDO
+SCORE_RATE_DISTRACTED = 18.0  # distracao contribui na pontuacao (por segundo)
+
+# --- Microssono e piscadas ---
+MICROSLEEP_SECONDS = 2.0   # olhos fechados continuos >= isto = microssono
+BLINK_MAX_SECONDS  = 0.4   # fecho mais curto que isto conta como piscada
+FATIGUE_WINDOW     = 60.0  # janela p/ taxa de piscadas (segundos)
+
 
 # ----------------------------------------------------------------------------
 # 3. ALARME SONORO ESCALONADO (thread separada p/ nao travar o video)
@@ -187,6 +197,7 @@ def create_landmarker():
         running_mode=vision.RunningMode.VIDEO,
         num_faces=1,
         output_face_blendshapes=True,   # habilita eyeBlinkLeft/Right (metodo B)
+        output_facial_transformation_matrixes=True,  # pose da cabeca (distracao)
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
         min_tracking_confidence=0.5,
@@ -202,6 +213,125 @@ def blink_score(blend_result):
     """
     d = {c.category_name: c.score for c in blend_result}
     return max(d.get("eyeBlinkLeft", 0.0), d.get("eyeBlinkRight", 0.0))
+
+
+def head_euler_angles(matrix):
+    """Extrai (yaw, pitch, roll) em graus da matriz 4x4 de transformacao facial.
+
+    yaw   = virar a cabeca para os lados (esquerda/direita) -> distracao
+    pitch = inclinar para cima/baixo (cabeca caindo) -> sono
+    """
+    R = np.array(matrix, dtype=np.float64)[:3, :3]
+    sy = float(np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2))
+    if sy > 1e-6:
+        pitch = np.degrees(np.arctan2(R[2, 1], R[2, 2]))
+        yaw = np.degrees(np.arctan2(-R[2, 0], sy))
+        roll = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
+    else:
+        pitch = np.degrees(np.arctan2(-R[1, 2], R[1, 1]))
+        yaw = np.degrees(np.arctan2(-R[2, 0], sy))
+        roll = 0.0
+    return float(yaw), float(pitch), float(roll)
+
+
+class HeadPoseMonitor:
+    """Detecta DISTRACAO (olhos fora da via) por desvio de yaw da cabeca.
+
+    A linha de base (frente) e capturada na calibracao, deixando o sistema
+    robusto ao angulo do retrovisor.
+    """
+    def __init__(self):
+        self.yaw0 = 0.0
+        self.pitch0 = 0.0
+        self.calibrated = False
+        self._away_start = None
+
+    def set_baseline(self, yaw, pitch):
+        self.yaw0, self.pitch0 = yaw, pitch
+        self.calibrated = True
+
+    def update(self, now, yaw, pitch):
+        yaw_dev = yaw - self.yaw0
+        pitch_dev = pitch - self.pitch0
+        looking_away = abs(yaw_dev) > YAW_AWAY_DEG
+        if looking_away:
+            if self._away_start is None:
+                self._away_start = now
+            away_dur = now - self._away_start
+        else:
+            self._away_start = None
+            away_dur = 0.0
+        distracted = away_dur >= DISTRACTION_SECONDS
+        return yaw_dev, pitch_dev, distracted
+
+
+class FatigueMeters:
+    """Microssono, taxa de piscadas, duracao do fecho e latencia do alerta.
+
+    Chame update(now, closed_flag) a cada frame; e register_alert(now) quando
+    o alarme dispara (level>=1) para medir a latencia do alerta.
+    """
+    def __init__(self):
+        self._closed = False
+        self._closed_start = None
+        self._ms_flagged = False
+        self._alert_recorded = False
+        self.microsleep_count = 0
+        self.microsleep_active = False
+        self.closed_duration = 0.0
+        self._blinks = deque()          # timestamps de piscadas completas
+        self._blink_durs = deque()      # (t, duracao)
+        self.last_latency = None
+        self._latencies = []
+
+    def update(self, now, closed_flag):
+        if closed_flag and not self._closed:        # olhos acabaram de fechar
+            self._closed = True
+            self._closed_start = now
+            self._ms_flagged = False
+            self._alert_recorded = False
+        elif closed_flag and self._closed:          # continuam fechados
+            self.closed_duration = now - self._closed_start
+            if self.closed_duration >= MICROSLEEP_SECONDS and not self._ms_flagged:
+                self.microsleep_count += 1
+                self._ms_flagged = True
+            self.microsleep_active = self.closed_duration >= MICROSLEEP_SECONDS
+        elif (not closed_flag) and self._closed:    # olhos abriram -> fim do fecho
+            dur = now - self._closed_start
+            if dur < BLINK_MAX_SECONDS:
+                self._blinks.append(now)
+                self._blink_durs.append((now, dur))
+            self._closed = False
+            self.closed_duration = 0.0
+            self.microsleep_active = False
+
+        while self._blinks and now - self._blinks[0] > FATIGUE_WINDOW:
+            self._blinks.popleft()
+        while self._blink_durs and now - self._blink_durs[0][0] > FATIGUE_WINDOW:
+            self._blink_durs.popleft()
+
+    def register_alert(self, now):
+        if self._closed and self._closed_start is not None and not self._alert_recorded:
+            self.last_latency = now - self._closed_start
+            self._latencies.append(self.last_latency)
+            self._alert_recorded = True
+
+    @property
+    def blink_rate(self):
+        """Piscadas por minuto (na janela FATIGUE_WINDOW)."""
+        return len(self._blinks) * (60.0 / FATIGUE_WINDOW)
+
+    @property
+    def mean_blink_ms(self):
+        if not self._blink_durs:
+            return 0.0
+        return 1000.0 * sum(d for _, d in self._blink_durs) / len(self._blink_durs)
+
+    @property
+    def avg_latency(self):
+        if not self._latencies:
+            return None
+        return sum(self._latencies) / len(self._latencies)
 
 
 # ----------------------------------------------------------------------------
@@ -223,7 +353,9 @@ class CsvLogger:
       ground_truth rotulo verdadeiro: 1 = olhos fechados/sonolento (tecla 'g')
     """
     HEADER = ["t", "ear", "ear_ratio", "blink_blend", "state",
-              "score", "level", "perclos", "yawns", "ground_truth"]
+              "score", "level", "perclos", "yawns",
+              "yaw_dev", "pitch_dev", "distracted", "microsleep", "blink_rate",
+              "ground_truth"]
 
     def __init__(self, folder=None):
         if folder is None:
@@ -235,11 +367,14 @@ class CsvLogger:
         self._w = csv.writer(self._f)
         self._w.writerow(self.HEADER)
 
-    def log(self, t, ear, ear_ratio, blink_blend, state,
-            score, level, perclos, yawns, ground_truth):
+    def log(self, t, ear, ear_ratio, blink_blend, state, score, level, perclos,
+            yawns, yaw_dev, pitch_dev, distracted, microsleep, blink_rate,
+            ground_truth):
         self._w.writerow([round(t, 3), round(ear, 4), round(ear_ratio, 4),
                           round(blink_blend, 4), state, round(score, 2), level,
-                          round(perclos, 4), yawns, int(ground_truth)])
+                          round(perclos, 4), yawns, round(yaw_dev, 1),
+                          round(pitch_dev, 1), int(distracted), microsleep,
+                          round(blink_rate, 1), int(ground_truth)])
 
     def close(self):
         try:
@@ -331,6 +466,11 @@ def main(camera_index=0):
     yawn_active = False
     yawn_count = 0
 
+    # Atencao/distracao e fadiga
+    headpose = HeadPoseMonitor()
+    fatigue = FatigueMeters()
+    headpose_samples = []
+
     # Registro p/ avaliacao do artigo
     logger = None
     recording = False
@@ -360,6 +500,9 @@ def main(camera_index=0):
         ear = 0.0
         ear_ratio = 1.0
         blink = 0.0
+        yaw_dev = 0.0
+        pitch_dev = 0.0
+        distracted = False
         state = "SEM ROSTO"
         level = 0
         perclos = 0.0
@@ -374,13 +517,23 @@ def main(camera_index=0):
             if res.face_blendshapes:
                 blink = blink_score(res.face_blendshapes[0])  # Metodo B (ML)
 
+            # Pose da cabeca (yaw/pitch) p/ deteccao de distracao
+            yaw = pitch = 0.0
+            if res.facial_transformation_matrixes:
+                yaw, pitch, _ = head_euler_angles(
+                    res.facial_transformation_matrixes[0])
+
             # ---------- CALIBRACAO ----------
             if calibrating:
                 calib_samples.append(ear)
+                headpose_samples.append((yaw, pitch))
                 if now - calib_start >= CALIB_SECONDS:
                     arr = np.array(calib_samples)
                     # mediana dos quadros bons (descarta piscadas)
                     ear_open = float(np.median(arr[arr > np.percentile(arr, 40)]))
+                    hp = np.array(headpose_samples)
+                    headpose.set_baseline(float(np.median(hp[:, 0])),
+                                          float(np.median(hp[:, 1])))
                     calibrating = False
                     print(f"Calibracao concluida. EAR aberto = {ear_open:.3f}")
                 draw_hud(frame, 0, 0, ear, "", 0, False, True, fps)
@@ -419,6 +572,15 @@ def main(camera_index=0):
             if perclos_buf:
                 perclos = sum(1 for _, c in perclos_buf if c) / len(perclos_buf)
 
+            # ---------- DISTRACAO (olhos fora da via) ----------
+            yaw_dev, pitch_dev, distracted = headpose.update(now, yaw, pitch)
+            if distracted:
+                score += SCORE_RATE_DISTRACTED * dt
+                state = "DISTRAIDO"
+
+            # ---------- MICROSSONO / PISCADAS ----------
+            fatigue.update(now, closed_flag)
+
         else:
             # Sem rosto: pode ser cabeca baixa (dormindo) -> sobe devagar
             score += SCORE_RATE_HALF * dt * 0.5
@@ -434,11 +596,14 @@ def main(camera_index=0):
         else:
             level = 0
         alarm.set_level(level)
+        if level >= 1:
+            fatigue.register_alert(now)
 
         # ---------- REGISTRO EM CSV ----------
         if recording and logger is not None:
-            logger.log(now - start_t, ear, ear_ratio, blink, state,
-                       score, level, perclos, yawn_count, ground_truth)
+            logger.log(now - start_t, ear, ear_ratio, blink, state, score, level,
+                       perclos, yawn_count, yaw_dev, pitch_dev, distracted,
+                       fatigue.microsleep_count, fatigue.blink_rate, ground_truth)
 
         draw_hud(frame, score, level, ear, state, perclos, yawning, False, fps)
         # Indicadores de gravacao e rotulo verdadeiro
@@ -449,6 +614,17 @@ def main(camera_index=0):
         if ground_truth:
             cv2.putText(frame, "ROTULO: SONOLENTO", (w - 320, 70),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        # Linha com metricas de fadiga
+        info = "Piscadas/min: %.0f   Microssonos: %d   Yaw: %+.0f deg" % (
+            fatigue.blink_rate, fatigue.microsleep_count, yaw_dev)
+        cv2.putText(frame, info, (20, h - 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
+        if distracted:
+            cv2.putText(frame, "DISTRAIDO - OLHE A VIA", (w // 2 - 220, 55),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 3)
+        if fatigue.microsleep_active:
+            cv2.putText(frame, "MICROSSONO!", (w // 2 - 150, 110),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3)
         cv2.imshow("Deteccao de Sonolencia - Motorista", frame)
 
         key = cv2.waitKey(1) & 0xFF
