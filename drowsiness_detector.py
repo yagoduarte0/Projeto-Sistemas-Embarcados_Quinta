@@ -158,14 +158,15 @@ def eye_aspect_ratio(landmarks, idx):
     p = [landmarks[i] for i in idx]
     vert = _dist(p[1], p[5]) + _dist(p[2], p[4])
     horiz = 2.0 * _dist(p[0], p[3])
-    return vert / horiz if horiz > 1e-6 else 0.0
+    # float() garante tipo nativo (numpy.float64 quebra o jsonify do Flask)
+    return float(vert / horiz) if horiz > 1e-6 else 0.0
 
 
 def mouth_aspect_ratio(landmarks, idx):
     p = [landmarks[i] for i in idx]
     horiz = _dist(p[0], p[1])
     vert = _dist(p[2], p[3])
-    return vert / horiz if horiz > 1e-6 else 0.0
+    return float(vert / horiz) if horiz > 1e-6 else 0.0
 
 
 def landmarks_to_array(face_landmarks, w, h):

@@ -48,6 +48,9 @@
   .ctlLabel{font-size:11px;color:var(--muted);text-transform:uppercase;
             letter-spacing:.5px;margin-top:14px;margin-bottom:2px}
   .btns{display:flex;gap:10px;margin-top:6px}
+  .bigBtn{width:100%;margin-top:6px;padding:14px;font-size:16px;font-weight:700;
+          background:var(--green);color:#06210f;border:none}
+  .bigBtn.on{background:var(--red);color:#2a0a0a}
   button{flex:1;background:var(--panel2);color:var(--txt);border:1px solid var(--line);
          padding:11px;border-radius:10px;font-size:14px;cursor:pointer;font-weight:600}
   button:hover{background:#243044}
@@ -88,6 +91,7 @@
       <div class="scoreNum" id="scoreNum">0</div>
       <div class="scoreBar"><div class="scoreFill" id="scoreFill"></div></div>
       <div class="ctlLabel">Controle da sessão</div>
+      <button onclick="startStop()" id="startBtn" class="bigBtn">▶ Iniciar sessão</button>
       <div class="btns">
         <button onclick="togglePause()" id="pauseBtn">⏸ Pausar</button>
         <button onclick="recalibrate()">↻ Recalibrar</button>
@@ -176,7 +180,8 @@ async function tick(){
     const banner = document.getElementById('banner');
     let btxt = m.level_label + (m.level>=3 ? '  —  PARE O VEÍCULO' : '');
     let bcol = c;
-    if(m.paused){ btxt = '⏸ PAUSADO'; bcol = '#64748b'; }
+    if(!m.started){ btxt = '▶ PRONTO PARA INICIAR'; bcol = '#3b82f6'; }
+    else if(m.paused){ btxt = '⏸ PAUSADO'; bcol = '#64748b'; }
     else if(m.microsleep_active){ btxt = 'MICROSSONO DETECTADO!'; bcol = '#ef4444'; }
     else if(m.distracted){ btxt = 'DISTRAÍDO — OLHE A VIA'; bcol = '#f97316'; }
     banner.textContent = btxt;
@@ -205,6 +210,10 @@ async function tick(){
     const pb = document.getElementById('pauseBtn');
     pb.textContent = m.paused ? '▶ Retomar' : '⏸ Pausar';
     pb.style.background = m.paused ? '#1e3a5f' : '';
+    _started = m.started;
+    const stb = document.getElementById('startBtn');
+    stb.textContent = m.started ? '⏹ Parar sessão' : '▶ Iniciar sessão';
+    stb.className = m.started ? 'bigBtn on' : 'bigBtn';
 
     const rb = document.getElementById('recBtn');
     rb.textContent = m.recording ? '⏹ Gravar CSV: ON' : '⏺ Gravar CSV: OFF';
@@ -224,6 +233,10 @@ async function tick(){
 async function recalibrate(){ await fetch('/recalibrate',{method:'POST'}); }
 async function toggleSound(){ await fetch('/toggle_sound',{method:'POST'}); }
 async function togglePause(){ await fetch('/toggle_pause',{method:'POST'}); }
+let _started = false;
+async function startStop(){
+  await fetch(_started ? '/stop_session' : '/start_session', {method:'POST'});
+}
 async function toggleRecord(){ await fetch('/toggle_record',{method:'POST'}); }
 async function toggleTruth(){ await fetch('/toggle_truth',{method:'POST'}); }
 

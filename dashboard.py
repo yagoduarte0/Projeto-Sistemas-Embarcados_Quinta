@@ -61,6 +61,7 @@ class DrowsinessEngine:
         self._session_start = None
         self._recalib_request = False
         self._paused = False
+        self._started = False   # sessao so roda apos clicar em Iniciar
 
         # Registro p/ avaliacao do artigo (Metodo A=EAR, Metodo B=blendshape)
         self._recording = False
@@ -110,6 +111,25 @@ class DrowsinessEngine:
             self.alarm.set_level(0)   # silencia ao pausar
         return self._paused
 
+    def start_session(self):
+        """Inicia a sessao: zera tudo e dispara uma nova calibracao."""
+        self._started = True
+        self._paused = False
+        self._score = 0.0
+        self._yawn_count = 0
+        self._perclos_buf.clear()
+        self._fatigue = dd.FatigueMeters()
+        self._headpose = dd.HeadPoseMonitor()
+        self._session_start = time.time()
+        self._recalib_request = True   # forca calibracao agora
+        return self._started
+
+    def stop_session(self):
+        """Para a sessao: volta ao estado ocioso e silencia."""
+        self._started = False
+        self.alarm.set_level(0)
+        return self._started
+
     def toggle_record(self):
         self._recording = not self._recording
         if self._recording and self._logger is None:
@@ -129,7 +149,8 @@ class DrowsinessEngine:
             "state": "...", "ear": 0.0, "blink": 0.0, "perclos": 0.0, "yawns": 0,
             "fps": 0.0, "sound": True, "face": False,
             "calibrating": True, "recording": False, "ground_truth": False,
-            "paused": False, "distracted": False, "yaw": 0, "microsleep": 0,
+            "paused": False, "started": False,
+            "distracted": False, "yaw": 0, "microsleep": 0,
             "microsleep_active": False, "blink_rate": 0, "latency": None,
             "elapsed": 0.0,
         }
@@ -163,6 +184,29 @@ class DrowsinessEngine:
             dt = now - prev_t
             prev_t = now
             fps = 1.0 / dt if dt > 0 else 0.0
+
+            # ---------- OCIOSO: aguarda o usuario clicar em Iniciar ----------
+            if not self._started:
+                self.alarm.set_level(0)
+                iframe = frame.copy()
+                ov = iframe.copy()
+                cv2.rectangle(ov, (0, 0), (w, h), (0, 0, 0), -1)
+                cv2.addWeighted(ov, 0.5, iframe, 0.5, 0, iframe)
+                cv2.putText(iframe, "Clique em INICIAR", (w // 2 - 230, h // 2 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3)
+                cv2.putText(iframe, "posicione o rosto e olhe para a frente",
+                            (w // 2 - 250, h // 2 + 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+                ok_jpg, buf = cv2.imencode(".jpg", iframe,
+                                           [cv2.IMWRITE_JPEG_QUALITY, 70])
+                with self._lock:
+                    if ok_jpg:
+                        self._jpeg = buf.tobytes()
+                    self._metrics["started"] = False
+                    self._metrics["level"] = 0
+                    self._metrics["level_label"] = "PRONTO PARA INICIAR"
+                time.sleep(0.03)
+                continue
 
             # ---------- PAUSA: congela deteccao, silencia, mostra PAUSADO ----------
             if self._paused:
@@ -317,6 +361,7 @@ class DrowsinessEngine:
                     "recording": self._recording,
                     "ground_truth": self._ground_truth,
                     "paused": False,
+                    "started": True,
                     "distracted": self._distracted,
                     "yaw": round(self._yaw_dev, 0),
                     "microsleep": self._fatigue.microsleep_count,
@@ -379,6 +424,16 @@ def recalibrate():
 @app.route("/toggle_pause", methods=["POST"])
 def toggle_pause():
     return jsonify({"paused": engine.toggle_pause()})
+
+
+@app.route("/start_session", methods=["POST"])
+def start_session():
+    return jsonify({"started": engine.start_session()})
+
+
+@app.route("/stop_session", methods=["POST"])
+def stop_session():
+    return jsonify({"started": engine.stop_session()})
 
 
 @app.route("/toggle_sound", methods=["POST"])
