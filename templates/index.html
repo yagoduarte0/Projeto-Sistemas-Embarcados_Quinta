@@ -97,6 +97,10 @@
         <button onclick="recalibrate()">↻ Recalibrar</button>
         <button onclick="toggleSound()" id="soundBtn">🔊 Silenciar</button>
       </div>
+      <div class="btns">
+        <button onclick="restartSession()">🔄 Reiniciar (zera números)</button>
+        <button onclick="shutdownApp()" id="shutdownBtn" style="background:#7f1d1d">⏻ Encerrar programa</button>
+      </div>
       <div class="ctlLabel">Coleta de dados (artigo)</div>
       <div class="btns">
         <button onclick="toggleRecord()" id="recBtn">⏺ Gravar CSV: OFF</button>
@@ -105,6 +109,10 @@
       <div style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">
         <b>Pausar</b> congela a detecção e o som. <b>Recalibrar</b> zera a
         pontuação. <b>Silenciar</b> só desliga o som.<br>
+        <b>Reiniciar</b> zera pontuação, bocejos, microssonos, piscadas e
+        tempo de sessão, e recalibra. <b>Encerrar programa</b> libera a
+        câmera e desliga o servidor (é preciso rodar
+        <code>python dashboard.py</code> de novo para voltar).<br>
         Para coletar dados: ligue <b>Gravar</b> e mantenha o <b>Rótulo</b> em
         "sonolento" enquanto fecha os olhos. Depois rode <code>evaluate.py</code>.
       </div>
@@ -166,7 +174,9 @@ function fmtTime(s){
   return m>0 ? `${m}m ${ss}s` : `${ss}s`;
 }
 
+let _shuttingDown = false;
 async function tick(){
+  if(_shuttingDown) return;
   try{
     const r = await fetch('/metrics'); const m = await r.json();
     const c = COLORS[m.level] || '#22c55e';
@@ -239,6 +249,17 @@ async function startStop(){
 }
 async function toggleRecord(){ await fetch('/toggle_record',{method:'POST'}); }
 async function toggleTruth(){ await fetch('/toggle_truth',{method:'POST'}); }
+async function restartSession(){ await fetch('/start_session',{method:'POST'}); }
+
+async function shutdownApp(){
+  if(!confirm('Encerrar o programa? A câmera e o servidor serão desligados.\nPara voltar, rode "python dashboard.py" novamente.')) return;
+  _shuttingDown = true;
+  try{ await fetch('/shutdown',{method:'POST'}); }catch(e){}
+  const banner = document.getElementById('banner');
+  banner.textContent = '⏻ PROGRAMA ENCERRADO — pode fechar esta aba';
+  banner.style.background = '#64748b';
+  banner.style.boxShadow = 'none';
+}
 
 setInterval(tick, 160);   // ~6x por segundo
 tick();

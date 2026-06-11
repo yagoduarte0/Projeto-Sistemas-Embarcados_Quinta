@@ -25,6 +25,7 @@ Uso:
   depois abra http://127.0.0.1:5000 no navegador.
 """
 
+import os
 import sys
 import time
 import threading
@@ -449,6 +450,19 @@ def toggle_record():
 @app.route("/toggle_truth", methods=["POST"])
 def toggle_truth():
     return jsonify({"ground_truth": engine.toggle_truth()})
+
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    """Libera a camera e encerra o processo por completo."""
+    engine.stop()
+
+    def _exit_later():
+        time.sleep(0.5)  # da tempo da resposta HTTP ser enviada
+        os._exit(0)
+
+    threading.Thread(target=_exit_later, daemon=True).start()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
