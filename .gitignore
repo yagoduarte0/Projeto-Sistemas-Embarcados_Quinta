@@ -7,7 +7,3 @@ env/
 # Cache de bytecode Python
 __pycache__/
 *.pyc
-
-# Saidas geradas em runtime (coleta de dados e avaliacao)
-logs/
-figures/
